@@ -1,1 +1,75 @@
-temp
+<!DOCTYPE HTML>
+<html>
+<head>
+  <title>Tupelo</title>
+  <meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta id="hdescription" name="description" content="Tupelo Browser">
+
+    <link rel="shortcut icon" type="image/ico" href="img/db-16.png">
+    
+    <link rel="stylesheet" href="css/main.css">
+    <link rel="stylesheet" href="css/form.css">
+
+    <script src="js/browser_tools.js"></script>
+    <script src="js/app.js"></script>
+</head>
+
+<body>
+<script>
+if (window.File && window.FileReader) {
+    //alert("File API supported");
+} else {
+    alert("File APIs are not supported in this browser.");
+}
+
+function readCmdFile(evt)
+{
+    // Retrieve the first (and only!) File from the FileList object
+    var f = document.getElementById('commandFile').files[0];
+    if (f) {
+        var r = new FileReader();
+        r.onload = function(e) {
+/***
+            alert("Got the file " 
+              + "name: " + f.name + "\n"
+              + "type: " + f.type + "\n"
+              + "size: " + f.size + " bytes"
+            );
+***/
+            //var area = document.getElementById("resultDiv");
+            //area.innerHTML = e.target.result;
+            var area = document.getElementById("commandTextarea");
+            area.value = e.target.result;
+        }
+        r.readAsText(f);
+    } else { 
+        alert("Failed to load file");
+    }
+  }
+</script>
+
+<p>
+<h1>Tupelo database</h1>
+<br>
+<h2>Enter SQL command(s):</h2>
+<label>Enter from a file:
+  <input type='file' id='commandFile' onchange="readCmdFile()">
+</label>
+<p>
+  <textarea id="commandTextarea" rows=10 col=10 type="text"
+		style="width:75%;"
+		autocomplete="off" autocorrect="off" autocapitalize="off"
+		tabindex="0" spellcheck="false" wrap="off"
+		></textarea>
+      <br/>
+      <button type="button" onclick="sendToTupelo()">
+	SEND to Tupelo server
+      </button> 
+<br>
+<h2>Results:</h2>
+<br>
+<div id="QueryResult" style="width:75%; min-height:120px; max-height:70%; overflow:auto; background:#CCFFFF;">
+
+</body>
+</html>
