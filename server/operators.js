@@ -499,8 +499,7 @@ exports.Update.prototype.exec = function() {
 
 //-------------------------------------------------
 
-exports.Union = function(unionall) {
-    this.unionall = unionall;
+exports.Union = function() {
     this.colsOutput = [];
     this.requiredChildProperties = [];
     this.children = [];
@@ -519,11 +518,7 @@ exports.Union.prototype.addChild = function(op) {
     this.children.push(op);
 }
 exports.Union.prototype.getOperatorName= function() {
-    if (this.unionall) {
-	return '[UnionAll]';
-    } else {
-	return '[Union]';
-    }
+    return '[Union]';
 }
 exports.Union.prototype.printTree = function() {
     console.log(this.getOperatorName());
@@ -544,37 +539,18 @@ exports.Union.prototype.printTree = function() {
 exports.Union.prototype.exec = function() {
     var rowsLeft = this.children[0].exec();
     var rowsRight = this.children[1].exec();
-    var rowsUnionAll = [];
+    var rows = [];
 
     for (var l=0; l<rowsLeft.length; l++) {
         //console.log("====ROW LEFT====\n" + ' ' + rowsLeft[l]);
-        rowsUnionAll.push(rowsLeft[l]);
+        rows.push(rowsLeft[l]);
     }
     for (var r=0; r<rowsRight.length; r++) {
         //console.log("====ROW RIGHT====\n" + ' ' + rowsRight[r]);
-        rowsUnionAll.push(rowsRight[r]);
+        rows.push(rowsRight[r]);
     }
-    //console.log("====ROWS====\n" + ' ' + rowsUnionAll);
-    if (this.unionall) {
-        return rowsUnionAll;
-    }
-
-    // find distinct rows
-    var arr = rowsUnionAll.sort();
-    var rowsUnion = [arr[0]];
-    for (var i=1; i<arr.length; i++) {
-        var rowMatch = true;
-        for (var j=0; j<rowsUnionAll[0].length; j++) {
-            if (arr[i-1][j] != arr[i][j]) {
-                rowMatch = false;
-                break;
-            }
-        }
-        if (!rowMatch) {
-            rowsUnion.push(arr[i]);
-        }
-    }
-    return rowsUnion;
+    //console.log("====ROWS====\n" + ' ' + rows);
+    return rows;
 }
 
 //-------------------------------------------------
@@ -721,6 +697,17 @@ exports.TableRead.prototype.exec = function() {
 //=============================================================
 
 
+/*** Supported outer joins
+ *   LEFT JOIN
+ *     Return all rows from the left table, even if there are no matches in
+ *     the right table. Fill in unmatched columns with NULLs.
+ *   RIGHT JOIN
+ *     Return all rows from the right table, even if there are no matches in
+ *     the left table. Fill in unmatched columns with NULLs.
+ *   FULL JOIN
+ *     Return all rows from both tables, even if there are no matches.
+ *     Fill in unmatched columns with NULLs.
+****/
 exports.OuterJoin = function(ojtype) {
     this.outerjointype = ojtype;
     this.condition = null;
@@ -898,6 +885,15 @@ exports.OuterJoin.prototype.exec = function() {
 
 //-------------------------------------------------
 
+/*** Supported joins
+ *   INNER JOIN / JOIN
+ *     Return rows when there is at least one match in both tables.
+ *   NATURAL JOIN
+ *     Return rows where column name(s) are the same.
+ *   CROSS JOIN
+ *     Cartesian product of the sets of rows from the joined tables. Each row
+ *     from the first table is combined with each row from the second table.
+ ***/
 exports.Join = function() {
     this.conditionTree = null;
     this.colsOutput = [];
@@ -998,6 +994,66 @@ function joinPredicate(op, valLeft, valRight) {
 
 //-------------------------------------------------
 
+exports.Distinct = function() {
+    this.colsOutput = [];
+    this.requiredChildProperties = [];
+    this.children = [];
+}
+exports.Distinct.prototype.addChild = function(op) {
+    if (this.children.length > 0) {
+        throw "DISTINCT node already has a child";
+    }
+    this.children.push(op);
+}
+exports.Distinct.prototype.getCost = function() {
+    var cost = 3;
+    for (var c=0; c<this.children.length; c++) {
+        cost += this.children[c].getCost();
+    }
+    return cost;
+}
+exports.Distinct.prototype.getOperatorName= function() {
+    return '[Distinct]';
+}
+exports.Distinct.prototype.printTree = function() {
+    console.log(this.getOperatorName());
+    if (SHOW_COLUMNS) {
+        for (var i=0; i<this.colsOutput.length; i++) {
+            console.log("  Col " + i + " OUT " + this.colsOutput[i]);
+        }
+        for (var j=0; j<this.requiredChildProperties[0].columns.length; j++) {
+            console.log("  REQ Col " + this.requiredChildProperties[0].columns[j]);
+        }
+    }
+    for (var c=0; c<this.children.length; c++) {
+        this.children[c].printTree();
+    }
+}
+exports.Distinct.prototype.exec = function() { 
+    console.log("DISTINCT: exec");
+    var rows = this.children[0].exec();
+
+    // NOTE: distinct by column type (lexicographical/numeric/datetime/etc.)
+    // find distinct rows
+    var arr = rows.sort();
+    var rowsDistinct = [arr[0]];
+    for (var i=1; i<arr.length; i++) {
+        var rowMatch = true;
+        for (var j=0; j<rows[0].length; j++) {
+            if (arr[i-1][j] != arr[i][j]) {
+                rowMatch = false;
+                break;
+            }
+        }
+        if (!rowMatch) {
+            rowsDistinct.push(arr[i]);
+        }
+    }
+    return rowsDistinct;
+}
+
+//-------------------------------------------------
+
 exports.Sort = function() {
     this.colsOutput = [];
     this.requiredChildProperties = [];
@@ -1027,10 +1083,8 @@ exports.Sort.prototype.printTree = function() {
         for (var i=0; i<this.colsOutput.length; i++) {
             console.log("  Col " + i + " OUT " + this.colsOutput[i]);
         }
-        for (var i=0; i<this.requiredChildProperties.length; i++) {
-            for (var j=0; j<this.requiredChildProperties[i].columns.length; j++) {
-                console.log("  REQ Col[" + i + ',' + j + "] " + this.requiredChildProperties[i].columns[j]);
-            }
+        for (var j=0; j<this.requiredChildProperties[0].columns.length; j++) {
+            console.log("  REQ Col " + this.requiredChildProperties[0].columns[j]);
         }
     }
     for (var c=0; c<this.children.length; c++) {

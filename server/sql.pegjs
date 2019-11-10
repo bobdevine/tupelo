@@ -50,8 +50,13 @@ select_stmt
     _ h:HavingExpr?
     _ ob:OrderByExpr?
     {
+      var dup = null;
+      if (d) {
+        dup = d.toUpperCase();
+      }
       return {
 	stmt: "SELECT",
+	duplicates: dup,
 	fields: listToArray(c, cx),
 	from: listToArray(t, tx),
 	where: w,

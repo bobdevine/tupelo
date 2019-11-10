@@ -310,7 +310,7 @@ function LogicalSelectPlanner(ast)
 		
 	var props = new Operators.Properties();
 	for (var c=0; c<op.colsOutput.length; c++) {
-	    console.log("LogicalPlanner: col=" + op.colsOutput[c]);
+	    //console.log("LogicalPlanner: col=" + op.colsOutput[c]);
 	    opCP.colsOutput.push(op.colsOutput[c]);
 	    props.columns.push(op.colsOutput[c]);
 	}
@@ -362,14 +362,43 @@ function LogicalSelectPlanner(ast)
 	parseGroupByClause(opSelect, tableMetadata, ast.groupby);
     }
 
-    //console.log("step 3 validate/resolve all fields/column names");
+    //console.log("step 3 validate/resolve all fields/columns");
+    // SELECT a = OK
+    // SELECT * = OK
+    // SELECT a,* = error
+    // SELECT *,a = error
+    // SELECT *,* = error
+    // SELECT f(a) = OK
+    // SELECT f(a),b = OK with a "GROUP BY"
+    // SELECT f(a),f(b) = error (but a weird class is okay)
     var countAggFunc = 0;
+    var countStar = 0;
+    var countTerm = 0;
     for (var f=0; f<ast.fields.length; f++) {
 	if (ast.fields[f].hasOwnProperty("field")) {
-	    extractField(ast.fields[f].field, opDisplay, propsDisplay);
+	    var token = extractField(ast.fields[f].field, tableMetadata, opDisplay, propsDisplay);
+	    if (token == '*') {	countStar += 1; }
+	    if (token == 't') {	countTerm += 1; }
+	    //if ((countStar + countTerm) >= 2) {
+	    if (countStar > 1) {
+		throw "SQL error: multiple *s";
+	    }
+	    if (countTerm > 0 && countAggFunc > 0) {
+		// TODO grouping
+		throw "SQL error: regular term mixed with aggregate function";
+	    }
+	    if (countStar > 0 && countAggFunc > 0) {
+		throw "SQL error: * mixed with aggregate function";
+	    }
+	    if (countStar > 0 && countTerm > 0) {
+		throw "SQL error: * mixed with column names";
+	    }
 	} else if (ast.fields[f].hasOwnProperty("func")) {
 	    if (countAggFunc > 0) {
-		throw "Multiple aggregate functions";
+		throw "SQL error: Multiple aggregate functions";
+	    }
+	    if (countStar > 0) {
+		throw "SQL error: aggregate function mixed with *";
 	    }
 	    extractFunction(ast.fields[f], opDisplay, propsDisplay);
 	    countAggFunc += 1;
@@ -379,8 +408,26 @@ function LogicalSelectPlanner(ast)
     }
     opDisplay.requiredChildProperties.push(propsDisplay);
 
+    if (ast.duplicates != null && ast.duplicates == "DISTINCT") {
+	console.log("DISTINCT");
+	var opDistinct = new Operators.Distinct();
+	var propsDistinct = new Operators.Properties();
+        for (var i=0; i<opDisplay.requiredChildProperties.length; i++) {
+            for (var j=0; j<opDisplay.requiredChildProperties[i].columns.length; j++) {
+		var colname = opDisplay.requiredChildProperties[i].columns[j];
+		propsDistinct.columns.push(colname);
+		opDistinct.colsOutput.push(colname);
+            }
+        }
+	opDistinct.requiredChildProperties.push(propsDistinct);
+	
+	opDistinct.children.push(opDisplay.children[0]);
+	opDisplay.children[0] = opDistinct;
+    }
+    
     return opDisplay;
 }
+
 
 function buildDataSource(tableMetadata, source) {
     //console.log("buildDataSource: source table=" + source.table);
@@ -627,7 +674,7 @@ function buildDataSource_UNIONALL(tableMetadata, source) {
 	throw "tables are not union compatible";
     }
 
-    var opUnion = new Operators.Union(true);
+    var opUnion = new Operators.Union();
     opUnion.addChild(opTableLeft);
     opUnion.addChild(opTableRight);
     
@@ -654,7 +701,7 @@ function buildDataSource_UNION(tableMetadata, source) {
 	throw "tables are not union compatible";
     }
 
-    var opUnion = new Operators.Union(false);
+    var opUnion = new Operators.Union();
     opUnion.addChild(opTableLeft);
     opUnion.addChild(opTableRight);
     
@@ -670,7 +717,18 @@ function buildDataSource_UNION(tableMetadata, source) {
     }
     opUnion.requiredChildProperties.push(propsLeft);
     opUnion.requiredChildProperties.push(propsRight);
-    return opUnion;
+
+    var opDistinct = new Operators.Distinct();
+    var propsDistinct = new Operators.Properties();
+    for (var i=0; i<opUnion.colsOutput.length; i++) {
+	    var colname = opUnion.colsOutput[i];
+	    propsDistinct.columns.push(colname);
+	    opDistinct.colsOutput.push(colname);
+    }
+    opDistinct.requiredChildProperties.push(propsDistinct);
+    opDistinct.children.push(opUnion);
+
+    return opDistinct;
 }
 
 function buildDataSource_TABLE(tableMetadata, source) {
@@ -882,43 +940,45 @@ function buildCrossJoinCondition(opJoin, opTableLeft, opTableRight, cond) {
 }
 
 
-function extractField(field, op, props) {
-    var countStar = 0;
+function extractField(field, tableMetadata, op, props) {
     if (field == "*") {
-	if (countStar > 0) {
-	    throw "Invalid query - multiple *s";
-	}
-	countStar += 1;
 	// expand the * to be all columns received from child
 	for (var i=0; i<op.children[0].colsOutput.length; i++) {
 	    op.colsOutput.push(op.children[0].colsOutput[i]);
 	    props.columns.push(op.children[0].colsOutput[i]);
 	}
+	return '*';
     } else if (field.indexOf(".") > 0) {
 	var parts = field.split(".");
 	if (parts.length != 2) {
 	    throw "invalid column name " + field;
 	}
-	for (var t=0; t<tableMetadata.tables.length; t++) {
-	    console.log("term's table prefix = " + parts[0] + " table = " + tableMetadata.tables[t].name);
+	for (var t=0; t<tableMetadata.length; t++) {
+	    //console.log("term's table prefix = " + parts[0] + " table = " + tableMetadata[t].name);
 	}
 	op.colsOutput.push(field)
 	props.columns.push(parts[1]);
+	return 't';
     } else {
 	var matchCount = 0;
-	for (var i=0; i<op.children[0].colsOutput.length; i++) {
-	    if (field == op.children[0].colsOutput[i]) {
-		matchCount += 1;
+	for (var t=0; t<tableMetadata.length; t++) {
+	    //console.log("term's table = " + tableMetadata[t].name);
+	    for (var c=0; c<tableMetadata[t].columns.length; c++) {
+		//console.log("extractField: field = " + field + " table child = " + tableMetadata[t].columns[c].name);
+		if (field == tableMetadata[t].columns[c].name) {
+		    matchCount += 1;
+		}
 	    }
 	}
 	if (matchCount == 0) {
-	    throw "unknown column : " + field;
+	    throw "extractField: unknown column : " + field;
 	} else if (matchCount > 1) {
-	    throw "ambiguous column name : " + field;
+	    throw "extractField: ambiguous column name : " + field;
 	}
 
 	op.colsOutput.push(field);
 	props.columns.push(field);
+	return 't';
     }
 }
 
