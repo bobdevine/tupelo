@@ -13,16 +13,14 @@ const tupelo = require("./tupelo");
 tupelo.init();
 
 const config = require("./config");
-const { SERVER: { PORT} } = config;
+const { SERVER: { PORT } } = config;
 
 
-//const grammarFile = path.join(__dirname, 'sql.pegjs');
-var SQL_GRAMMAR = fs.readFileSync('sql.pegjs', { encoding: 'utf8' });
+const SQL_GRAMMAR = fs.readFileSync('sql.pegjs', { encoding: 'utf8' });
 //console.log('grammar: ', SQL_GRAMMAR);
 const SQL_PARSER = peg.generate(SQL_GRAMMAR);
 
 const app = express()
-//app.use(cors({origin: 'http://localhost' , credentials :  true}));
 const port = process.argv[2] || PORT;
 
 app.use(bodyParser.urlencoded({extended: true}));
@@ -84,6 +82,5 @@ app.post('/query', function (request, response) {
 
 const server = app.listen(port, function() {
     //var host = server.address().address;
-    //console.log("App listening at http://%s:%s", host, port);
-    console.log('TUPELO server listening on port', port);
+    console.log("TUPELO server listening on port", port);
 });

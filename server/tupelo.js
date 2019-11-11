@@ -409,7 +409,7 @@ function LogicalSelectPlanner(ast)
     opDisplay.requiredChildProperties.push(propsDisplay);
 
     if (ast.duplicates != null && ast.duplicates == "DISTINCT") {
-	console.log("DISTINCT");
+	//console.log("DISTINCT");
 	var opDistinct = new Operators.Distinct();
 	var propsDistinct = new Operators.Properties();
         for (var i=0; i<opDisplay.requiredChildProperties.length; i++) {
@@ -423,6 +423,10 @@ function LogicalSelectPlanner(ast)
 	
 	opDistinct.children.push(opDisplay.children[0]);
 	opDisplay.children[0] = opDistinct;
+    }
+    
+    if (ast.orderby != null) {
+	buildOrderBy(opDisplay, ast.orderby);
     }
     
     return opDisplay;
@@ -1181,6 +1185,31 @@ function parseGroupByClause(opSelect, tableMetadata, groupByAST) {
 	groupings.push(group);
     }
     opSelect.groupings = groupings;
+}
+
+function buildOrderBy(op, orderby) {
+    //console.log("==== ORDER BY " + orderby.arg + " "  + orderby.direction);
+    var idx = -1;
+
+    var opSort = new Operators.Sort();
+    opSort.sortDirection = orderby.direction;
+    var propsSort = new Operators.Properties();
+    for (var i=0; i<op.colsOutput.length; i++) {
+	var colname = op.colsOutput[i];
+	opSort.colsOutput.push(colname);
+	propsSort.columns.push(colname);
+	if (orderby.arg == colname) {
+	    //console.log("==== ORDER BY " + orderby.arg + " col = " + i);
+	    idx = i;
+	}
+    }
+    if (idx < 0) {
+	throw "Unknown column for ordering " + orderby.arg;
+    }
+    opSort.sortColumn = idx;
+    opSort.requiredChildProperties.push(propsSort);
+    opSort.children[0] = op.children[0];
+    op.children[0] = opSort;
 }
 
 //-----------------------------------------------------------

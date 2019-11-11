@@ -1092,22 +1092,11 @@ exports.Sort.prototype.printTree = function() {
     }
 }
 exports.Sort.prototype.exec = function() { 
-    //console.log("SORT: sort column '" + this.sortColumn + "' direction = " + this.sortDirection);
+    console.log("SORT: sort column '" + this.sortColumn + "' direction = " + this.sortDirection);
     var rows = this.children[0].exec();
-    var idx = -1;
-    for (var i=0; i<this.colsOutput.length; i++) {
-        if (this.sortColumn == this.colsOutput[i]) {
-            idx = i;
-            break;
-        }
-    }
+
     // NOTE: sort by column type (lexicographical/numeric/datetime/etc.)
-    if (idx >= 0) {
-        //console.log("SORT: sorting column # " + idx);
-        return rows.sort(sortfunction(idx, this.sortDirection));
-    } else {
-        return rows;
-    }
+    return rows.sort(sortfunction(this.sortColumn, this.sortDirection));
 }
 
 function sortfunction(idx, direction) {

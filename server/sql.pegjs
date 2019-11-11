@@ -136,7 +136,7 @@ SelectTable
   }
   
 SelectTableAlias
-  = !("WHERE"i / "LEFT"i / "RIGHT"i / "FULL"i / "UNION"i / "INNER"i / "NATURAL"i / "CROSS"i / "ON"i) ("AS"i)? _ a:Identifier
+  = !("WHERE"i / "LEFT"i / "RIGHT"i / "FULL"i / "UNION"i / "INNER"i / "NATURAL"i / "CROSS"i / "ON"i / "ORDER"i) ("AS"i)? _ a:Identifier
   {
     return a;
   }
@@ -199,9 +199,15 @@ HavingExpr
   = "HAVING"i _ h:SearchCondition
 
 OrderByExpr
-  = "ORDER"i _ "BY"i _ ob:Identifier
+  = "ORDER"i _ "BY"i _ ob:Identifier _ d:("ASC"i / "DESC"i)?
     {
-      return { arg: ob };
+      var dir;
+      if (d) {
+	dir = d.toUpperCase();
+      } else {
+	dir = "ASC";
+      }
+      return { arg: ob, direction: dir };
     }
 
 
