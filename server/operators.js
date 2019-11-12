@@ -1030,7 +1030,7 @@ exports.Distinct.prototype.printTree = function() {
     }
 }
 exports.Distinct.prototype.exec = function() { 
-    console.log("DISTINCT: exec");
+    //console.log("DISTINCT: exec");
     var rows = this.children[0].exec();
 
     // NOTE: distinct by column type (lexicographical/numeric/datetime/etc.)
@@ -1050,6 +1050,88 @@ exports.Distinct.prototype.exec = function() {
         }
     }
     return rowsDistinct;
+}
+
+//-------------------------------------------------
+
+function group() {
+    this.value = null;
+    this.rows = [];
+}
+
+exports.Grouping = function() {
+    this.colsOutput = [];
+    this.requiredChildProperties = [];
+    this.children = [];
+    this.aggregateFunction = null;
+    this.groupIndex = -1;
+    this.aggregateIndex = -1;
+}
+exports.Grouping.prototype.addChild = function(op) {
+    if (this.children.length > 0) {
+        throw "GROUPING node already has a child";
+    }
+    this.children.push(op);
+}
+exports.Grouping.prototype.getCost = function() {
+    var cost = 3;
+    for (var c=0; c<this.children.length; c++) {
+        cost += this.children[c].getCost();
+    }
+    return cost;
+}
+exports.Grouping.prototype.getOperatorName= function() {
+    return '[Grouping]';
+}
+exports.Grouping.prototype.printTree = function() {
+    console.log(this.getOperatorName());
+    if (SHOW_COLUMNS) {
+        for (var i=0; i<this.colsOutput.length; i++) {
+            console.log("  Col " + i + " OUT " + this.colsOutput[i]);
+        }
+        for (var j=0; j<this.requiredChildProperties[0].columns.length; j++) {
+            console.log("  REQ Col " + this.requiredChildProperties[0].columns[j]);
+        }
+    }
+    for (var c=0; c<this.children.length; c++) {
+        this.children[c].printTree();
+    }
+}
+exports.Grouping.prototype.exec = function() { 
+    //console.log("GROUPING: exec");
+    var rows = this.children[0].exec();
+
+    var rowsGrouping = [];
+    var g = new group();
+    g.value = rows[0][this.groupIndex];
+    g.rows.push(rows[0]);
+    rowsGrouping.push(g);
+    for (var i=1; i<rows.length; i++) {
+	var groupMatch = false;
+        for (var j=0; j<rowsGrouping.length; j++) {
+	    //console.log("GROUPING val = " + rowsGrouping[j].value + " row val = " + rows[i][this.groupIndex]);
+	    if (rowsGrouping[j].value == rows[i][this.groupIndex]) {
+		groupMatch = true;
+		rowsGrouping[j].rows.push(rows[i]);
+	    }
+	}
+	if (groupMatch == false) {
+	    var g = new group();
+	    g.value = rows[i][this.groupIndex];
+	    g.rows.push(rows[i]);
+	    rowsGrouping.push(g);
+	}
+    }
+
+    var rowsResult = [];
+    for (var j=0; j<rowsGrouping.length; j++) {
+	var r = [];
+	r.push(rowsGrouping[j].value);
+	var aggValue = aggFunction(this.aggregateFunction, rowsGrouping[j].rows, this.aggregateIndex);
+	r.push(aggValue);
+	rowsResult.push(r);
+    }
+    return rowsResult;
 }
 
 //-------------------------------------------------

@@ -136,7 +136,7 @@ SelectTable
   }
   
 SelectTableAlias
-  = !("WHERE"i / "LEFT"i / "RIGHT"i / "FULL"i / "UNION"i / "INNER"i / "NATURAL"i / "CROSS"i / "ON"i / "ORDER"i) ("AS"i)? _ a:Identifier
+  = !("WHERE"i / "LEFT"i / "RIGHT"i / "FULL"i / "UNION"i / "INNER"i / "NATURAL"i / "CROSS"i / "ON"i / "ORDER"i / "GROUP"i) ("AS"i)? _ a:Identifier
   {
     return a;
   }
@@ -175,17 +175,10 @@ GroupByExpr
   }
 
 GroupByParam
-  =  _ id:Identifier _ d:("ASC"i / "DESC"i)?
+  =  _ id:Identifier
   {
-    var dir;
-    if (d) {
-      dir = d.toUpperCase();
-    } else {
-      dir = "ASC";
-    }
     return {
-      ident : id,
-      direction: dir
+      ident : id
     };
   }
 

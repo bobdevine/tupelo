@@ -338,9 +338,9 @@ function LogicalSelectPlanner(ast)
     var propsDisplay = new Operators.Properties();
 
     //console.log("STEP 1 : check fields from WHERE");
-    // (here, the SELECT op is a relational operator, not the SQL verb)
     if (ast.where != null) {
 	//console.log("WHERE CLAUSE");
+	// here, the SELECT op is a relational operator, not the SQL verb
 	var opSelect = new Operators.Select();
 	//console.log("opTOP.colsOutput=" + opTOP.colsOutput);
 	opSelect.evalTree = buildWhereTree(tableMetadata, ast.where);
@@ -357,9 +357,17 @@ function LogicalSelectPlanner(ast)
     }
 
     //console.log("STEP 2: add GROUP BY");
+    var groupings = [];
     if (ast.groupby != null) {
+	// There is one case for aggregation without using a GROUP BY.
+	// Aggregating the full table is an implied GROUP BY.
+	// Aggregations can be filtered using a HAVING clause
+	// SQL sucks: GROUP BY treats NULL as groupable values
 	// var opGroup = new Operators.Group();
-	parseGroupByClause(opSelect, tableMetadata, ast.groupby);
+	parseGroupByClause(tableMetadata, ast.groupby, groupings);
+	//for (var g=0; g<groupings.length; g++) {
+	//    console.log("GroupBy: group col = " + groupings[g]);
+	//}
     }
 
     //console.log("step 3 validate/resolve all fields/columns");
@@ -374,17 +382,19 @@ function LogicalSelectPlanner(ast)
     var countAggFunc = 0;
     var countStar = 0;
     var countTerm = 0;
+    var countGroup = 0;
     for (var f=0; f<ast.fields.length; f++) {
 	if (ast.fields[f].hasOwnProperty("field")) {
-	    var token = extractField(ast.fields[f].field, tableMetadata, opDisplay, propsDisplay);
+	    var token = extractField(ast.fields[f].field, tableMetadata, opDisplay, propsDisplay, groupings);
 	    if (token == '*') {	countStar += 1; }
 	    if (token == 't') {	countTerm += 1; }
+	    if (token == 'g') {	countGroup += 1; }
 	    //if ((countStar + countTerm) >= 2) {
 	    if (countStar > 1) {
 		throw "SQL error: multiple *s";
 	    }
 	    if (countTerm > 0 && countAggFunc > 0) {
-		// TODO grouping
+		// mixing is okay with explicit grouping
 		throw "SQL error: regular term mixed with aggregate function";
 	    }
 	    if (countStar > 0 && countAggFunc > 0) {
@@ -400,10 +410,16 @@ function LogicalSelectPlanner(ast)
 	    if (countStar > 0) {
 		throw "SQL error: aggregate function mixed with *";
 	    }
-	    extractFunction(ast.fields[f], opDisplay, propsDisplay);
 	    countAggFunc += 1;
 	} else {
 	    throw "unknown type of query field " + ast.field[f];
+	}
+    }
+    for (var f=0; f<ast.fields.length; f++) {
+	if (ast.fields[f].hasOwnProperty("field")) {
+	    buildField(ast.fields[f].field, tableMetadata, opDisplay, propsDisplay, groupings);
+	} else if (ast.fields[f].hasOwnProperty("func")) {
+	    buildAggFunction(ast.fields[f], countTerm + countGroup, groupings, opDisplay, propsDisplay);
 	}
     }
     opDisplay.requiredChildProperties.push(propsDisplay);
@@ -944,13 +960,8 @@ function buildCrossJoinCondition(opJoin, opTableLeft, opTableRight, cond) {
 }
 
 
-function extractField(field, tableMetadata, op, props) {
+function extractField(field, tableMetadata, op, props, groupings) {
     if (field == "*") {
-	// expand the * to be all columns received from child
-	for (var i=0; i<op.children[0].colsOutput.length; i++) {
-	    op.colsOutput.push(op.children[0].colsOutput[i]);
-	    props.columns.push(op.children[0].colsOutput[i]);
-	}
 	return '*';
     } else if (field.indexOf(".") > 0) {
 	var parts = field.split(".");
@@ -960,8 +971,11 @@ function extractField(field, tableMetadata, op, props) {
 	for (var t=0; t<tableMetadata.length; t++) {
 	    //console.log("term's table prefix = " + parts[0] + " table = " + tableMetadata[t].name);
 	}
-	op.colsOutput.push(field)
-	props.columns.push(parts[1]);
+	for (var g=0; g<groupings.length; g++) {
+	    if (parts[1] == groupings[g]) {
+		return 'g';
+	    }
+	}
 	return 't';
     } else {
 	var matchCount = 0;
@@ -979,37 +993,98 @@ function extractField(field, tableMetadata, op, props) {
 	} else if (matchCount > 1) {
 	    throw "extractField: ambiguous column name : " + field;
 	}
-
-	op.colsOutput.push(field);
-	props.columns.push(field);
+	for (var g=0; g<groupings.length; g++) {
+	    if (field == groupings[g]) {
+		return 'g';
+	    }
+	}
 	return 't';
     }
 }
 
+function buildField(field, tableMetadata, op, props, groupings) {
+    if (field == "*") {
+	// expand the * to be all columns received from child
+	for (var i=0; i<op.children[0].colsOutput.length; i++) {
+	    op.colsOutput.push(op.children[0].colsOutput[i]);
+	    props.columns.push(op.children[0].colsOutput[i]);
+	}
+    } else if (field.indexOf(".") > 0) {
+	var parts = field.split(".");
+	if (parts.length != 2) {
+	    throw "invalid column name " + field;
+	}
+	for (var t=0; t<tableMetadata.length; t++) {
+	    //console.log("term's table prefix = " + parts[0] + " table = " + tableMetadata[t].name);
+	}
+	op.colsOutput.push(field)
+	props.columns.push(parts[1]);
+    } else {
+	var matchCount = 0;
+	for (var t=0; t<tableMetadata.length; t++) {
+	    //console.log("term's table = " + tableMetadata[t].name);
+	    for (var c=0; c<tableMetadata[t].columns.length; c++) {
+		//console.log("extractField: field = " + field + " table child = " + tableMetadata[t].columns[c].name);
+		if (field == tableMetadata[t].columns[c].name) {
+		    matchCount += 1;
+		}
+	    }
+	}
+	if (matchCount == 0) {
+	    throw "extractField: unknown column : " + field;
+	} else if (matchCount > 1) {
+	    throw "extractField: ambiguous column name : " + field;
+	}
+	op.colsOutput.push(field);
+	props.columns.push(field);
+    }
+}
 
-function extractFunction(field, op, props) {
-    var opAgg = new Operators.Aggregate();
-    var propsAgg = new Operators.Properties();
-    opAgg.aggregateFunction = field.func;
-    opAgg.requiredChildProperties.push(propsAgg);
-    opAgg.children.push(op.children[0]);
-    op.children[0] = opAgg;
-    
+
+function buildAggFunction(field, numTerms, groupings, op, props) {
+    //console.log("buildAggFunction() countTerm = " + numTerms);
     if (field.param == "*") {
-	// SQL sucks! count(*) should be on result group, not a field
-	// the grammar should catch, but double-check here
 	if (field.func != "COUNT") {
+	    // the grammar should catch for only COUNT(*), but double-check
 	    throw "Only the COUNT function can use star here";
 	}
+	// SQL sucks! COUNT() should only be on a group,
+	// so make a special (implicit) group for the * case
 	if (field.alias) {
 	    op.colsOutput.push(field.alias);
 	} else {
 	    op.colsOutput.push("COUNT(*)");
 	}
-	props.columns.push("COUNT(*)");
-	opAgg.colsOutput.push("COUNT(*)");
-	// hack -- grab first column from child to use for count
-	propsAgg.columns.push(opAgg.children[0].colsOutput[0]);
+	if (numTerms == 0) {
+	    var opAgg = new Operators.Aggregate();
+	    var propsAgg = new Operators.Properties();
+	    opAgg.aggregateFunction = "COUNT";
+	    opAgg.requiredChildProperties.push(propsAgg);
+	    opAgg.children.push(op.children[0]);
+	    opAgg.colsOutput.push("COUNT(*)");
+	    // hack -- grab first column from child to use for count
+	    propsAgg.columns.push(opAgg.children[0].colsOutput[0]);
+	    props.columns.push("COUNT(*)");
+	    op.children[0] = opAgg;
+	} else {
+	    // add a grouping operator
+	    var opGroup = new Operators.Grouping();
+	    var propsGroup = new Operators.Properties();
+	    opGroup.aggregateFunction = "COUNT";
+	    opGroup.groupIndex = 0;
+	    opGroup.aggregateIndex = 1;
+	    opGroup.requiredChildProperties.push(propsGroup);
+	    opGroup.children.push(op.children[0]);
+	    for (var g=0; g<groupings.length; g++) {
+		console.log("extractFunction: group col = " + groupings[g]);
+		opGroup.colsOutput.push(groupings[g]);
+		propsGroup.columns.push(groupings[g]);
+	    }
+	    opGroup.colsOutput.push("COUNT(*)");
+	    propsGroup.columns.push(op.children[0].colsOutput[idx]);
+	    props.columns.push("COUNT(*)");
+	    op.children[0] = opGroup;
+	}
     } else if (field.param.indexOf(".") > 0) {
 	var parts = field.split(".");
 	if (parts.length != 2) {
@@ -1033,16 +1108,43 @@ function extractFunction(field, op, props) {
 	} else {
 	    op.colsOutput.push(field.func + "()");
 	}
-	props.columns.push(field.func + "()");
-	opAgg.colsOutput.push(field.func + "()");
-	opAgg.aggregateIndex = 0;
-	propsAgg.columns.push(opAgg.children[0].colsOutput[idx]);
+	if (numTerms == 0) {
+	    // if no other term, run aggregate on all rows
+	    var opAgg = new Operators.Aggregate();
+	    var propsAgg = new Operators.Properties();
+	    opAgg.aggregateFunction = field.func;
+	    opAgg.aggregateIndex = 0;
+	    opAgg.requiredChildProperties.push(propsAgg);
+	    opAgg.children.push(op.children[0]);
+	    opAgg.colsOutput.push(field.func + "()");
+	    propsAgg.columns.push(opAgg.children[0].colsOutput[idx]);
+	    props.columns.push(field.func + "()");
+	    op.children[0] = opAgg;
+	} else {
+	    // add a grouping operator for aggregate
+	    var opGroup = new Operators.Grouping();
+	    var propsGroup = new Operators.Properties();
+	    opGroup.aggregateFunction = field.func;
+	    opGroup.groupIndex = 0;
+	    opGroup.aggregateIndex = 1;
+	    opGroup.requiredChildProperties.push(propsGroup);
+	    opGroup.children.push(op.children[0]);
+	    for (var g=0; g<groupings.length; g++) {
+		console.log("extractFunction: group col = " + groupings[g]);
+		opGroup.colsOutput.push(groupings[g]);
+		propsGroup.columns.push(groupings[g]);
+	    }
+	    opGroup.colsOutput.push(field.func + "()");
+	    propsGroup.columns.push(op.children[0].colsOutput[idx]);
+	    props.columns.push(field.func + "()");
+	    op.children[0] = opGroup;
+	}
     } else {
 	var matchCount = 0;
 	var idx = 0;
-	for (var i=0; i<opAgg.children[0].colsOutput.length; i++) {
+	for (var i=0; i<op.children[0].colsOutput.length; i++) {
 	    //console.log("extractFunction: field = " + field.param + " child col = " + opAgg.children[0].colsOutput[i]);
-	    if (field.param == opAgg.children[0].colsOutput[i]) {
+	    if (field.param == op.children[0].colsOutput[i]) {
 		//console.log("extractFunction: FOUND field = " + field.param + " AT " + i);
 		idx = i;
 		matchCount += 1;
@@ -1058,10 +1160,36 @@ function extractFunction(field, op, props) {
 	} else {
 	    op.colsOutput.push(field.func + "()");
 	}
-	props.columns.push(field.func + "()");
-	opAgg.colsOutput.push(field.func + "()");
-	propsAgg.columns.push(opAgg.children[0].colsOutput[idx]);
-	opAgg.aggregateIndex = 0;
+	if (numTerms == 0) {
+	    var opAgg = new Operators.Aggregate();
+	    var propsAgg = new Operators.Properties();
+	    opAgg.aggregateFunction = field.func;
+	    opAgg.aggregateIndex = 0;
+	    opAgg.requiredChildProperties.push(propsAgg);
+	    opAgg.children.push(op.children[0]);
+	    opAgg.colsOutput.push(field.func + "()");
+	    propsAgg.columns.push(opAgg.children[0].colsOutput[idx]);
+	    op.children[0] = opAgg;
+	    props.columns.push(field.func + "()");
+	} else {
+	    console.log("extractFunction: GROUPING for " + field.func);
+	    var opGroup = new Operators.Grouping();
+	    var propsGroup = new Operators.Properties();
+	    opGroup.aggregateFunction = field.func;
+	    opGroup.groupIndex = 0;
+	    opGroup.aggregateIndex = 1;
+	    opGroup.requiredChildProperties.push(propsGroup);
+	    opGroup.children.push(op.children[0]);
+	    for (var g=0; g<groupings.length; g++) {
+		console.log("extractFunction: group col = " + groupings[g]);
+		opGroup.colsOutput.push(groupings[g]);
+		propsGroup.columns.push(groupings[g]);
+	    }
+	    opGroup.colsOutput.push(field.func + "()");
+	    propsGroup.columns.push(op.children[0].colsOutput[idx]);
+	    op.children[0] = opGroup;
+	    props.columns.push(field.func + "()");
+	}
     }
 }
 
@@ -1126,7 +1254,7 @@ function buildWhereTree(tableMetadata, node) {
 	    return { "colnum": -1, "value": node };
 	}
 	// check if name in list of known names
-	console.log("buildWhereTree: checking name = " + node);
+	//console.log("buildWhereTree: checking name = " + node);
 	var tableName = null;
 	var columnName = null;
 	if (node.indexOf(".") > 0) {
@@ -1143,13 +1271,13 @@ function buildWhereTree(tableMetadata, node) {
 	var matchCount = 0;
 	var colnum = -1;
 	for (var t=0; t<tableMetadata.length; t++) {
-	    console.log("buildWhereTree: table, name = " + tableMetadata[t].name + " alias = " + tableMetadata[t].alias);
+	    //console.log("buildWhereTree: table, name = " + tableMetadata[t].name + " alias = " + tableMetadata[t].alias);
 	    if ((tableMetadata.length == 1 && tableName == null) || tableName == tableMetadata[t].name || tableName == tableMetadata[t].alias) {
-		console.log("buildWhereTree: found table for " + tableName);
+		//console.log("buildWhereTree: found table for " + tableName);
 		for (var c=0; c<tableMetadata[t].columns.length; c++) {
-		    console.log("buildWhereTree: col name = " + tableMetadata[t].columns[c].name);
+		    //console.log("buildWhereTree: col name = " + tableMetadata[t].columns[c].name);
 		    if (columnName == tableMetadata[t].columns[c].name) {
-			console.log("buildWhereTree: found columnName = " + columnName);
+			//console.log("buildWhereTree: found columnName = " + columnName);
 			colnum = c;
 			matchCount += 1;
 		    }
@@ -1175,16 +1303,33 @@ function buildWhereTree(tableMetadata, node) {
     return wop;
 }
 
-function parseGroupByClause(opSelect, tableMetadata, groupByAST) {
-    groupings = [];
-    for (var i=0; i<groupByAST.length; i++) {
-	console.log("GROUP BY " + groupByAST[i].ident);
-	var group = { "col": groupByAST[i].ident,
-		      "dir": groupByAST[i].direction
-		    };
-	groupings.push(group);
+function parseGroupByClause(tableMetadata, groupByAST, groupings) {
+    if (groupByAST.length > 1) {
+	throw "Multiple group-by columns not supported";
     }
-    opSelect.groupings = groupings;
+    for (var i=0; i<groupByAST.length; i++) {
+	var groupName = groupByAST[i].ident;
+	//console.log("GROUP BY name = " + groupName);
+	for (var t=0; t<tableMetadata.length; t++) {
+	    //console.log("parseGroupByClause: table = " + tableMetadata[t].name);
+	    var matchCount = 0;
+	    for (var c=0; c<tableMetadata[t].columns.length; c++) {
+		var colname = tableMetadata[t].columns[c].name;
+		//console.log("parseGroupByClause: table col name = " + colname);
+		if (colname == groupName) {
+		    //console.log("parseGroupByClause: matched groupName = " + groupName);
+		    matchCount += 1;
+		}
+	    }
+	}
+	if (matchCount == 0) {
+	    throw "Unmatched group column name '" + groupName + "'";
+	} else if (matchCount > 1) {
+	    throw "Ambiguous group column name '"  + groupName + "' matched multiple tables";
+	} else {
+	    groupings.push(groupName);
+	}
+    }
 }
 
 function buildOrderBy(op, orderby) {
